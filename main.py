@@ -125,7 +125,7 @@ if __name__ == '__main__':
     chemprop_mouse_result = chemprop_result_df['MOUSE'].values
     chemprop_rat_result = chemprop_result_df['RAT'].values
     
-    DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result = predict_toxicity('mouse')
+    DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result = predict_toxicity('mouse', features)
     mouse_ensemble_values = merge_predictions(DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result, chemprop_mouse_result)
     
     result_df = pd.DataFrame()
@@ -137,7 +137,7 @@ if __name__ == '__main__':
     result_df['Mouse chemprop'] = chemprop_mouse_result
     result_df['Mouse ENSEMBLE'] = mouse_ensemble_values
     
-    DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result = predict_toxicity('rat')
+    DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result = predict_toxicity('rat', features)
     rat_ensemble_values = merge_predictions(DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result, chemprop_rat_result)
     
     result_df['Rat DNN'] = DNN_result
