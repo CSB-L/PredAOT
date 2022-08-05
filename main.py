@@ -75,7 +75,7 @@ def predict_toxicity_using_dnn_model(target_dir, features):
     y_predicted = y_predicted.reshape((-1,))
     return y_predicted
 
-def predict_toxicity(target_species='mouse'):
+def predict_toxicity(target_species, features):
     target_dir = './models/%s/'%(target_species)
     
     DNN_result = predict_toxicity_using_dnn_model(target_dir, features)
