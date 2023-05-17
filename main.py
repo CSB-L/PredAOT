@@ -4,15 +4,13 @@ import pandas as pd
 import os
 import glob
 import subprocess
-
+import tqdm
 import argparse
 import joblib
 
-from tensorflow.keras.models import model_from_json 
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-import xgboost as xgb
 
 def argument_parser():
     parser = argparse.ArgumentParser()    
@@ -26,7 +24,7 @@ def read_smiles(input_file):
     with open(input_file, 'r') as fp:
         fp.readline()
         for line in fp:
-            sptlist = line.strip().split(',')
+            sptlist = line.strip().split('\t')
             smiles = sptlist[0].strip()
             cid = sptlist[1].strip()            
             cid_list.append(cid)
@@ -47,63 +45,29 @@ def calculate_feature(smiles_list):
         features.append(feature)
     return np.asarray(features)
 
-def predict_toxicity_using_other_models(model_file, features):
-    
-    if 'XGBoost' in model_file:
-        features = xgb.DMatrix(data=features)
-        model = joblib.load(model_file)
-        
-    else:
-        model = joblib.load(model_file)
-    
+
+def predict_aot(model_file, features):
+    model = joblib.load(model_file)
     y_predicted = model.predict(features)
 
     return y_predicted
 
-def predict_toxicity_using_dnn_model(target_dir, features):
-    trained_model = target_dir+ 'DNN.json'
-    trained_weight = target_dir+ 'DNN.h5'
-    
-    json_file = open(trained_model, "r")
-    loaded_model_json = json_file.read() 
-    json_file.close()
 
-    model = model_from_json(loaded_model_json)
-    model.load_weights(trained_weight)
-    
-    y_predicted = model.predict(features)
-    y_predicted = y_predicted.reshape((-1,))
-    return y_predicted
+def predict_toxicity_reg(target_model_dir, features):
+    RF_result = predict_aot(target_model_dir, features)
+    return RF_result[0]
 
-def predict_toxicity(target_species, features):
-    target_dir = './models/%s/'%(target_species)
+def predict_toxicity_cls(target_species, features):
+    target_dir = './models/'
     
-    DNN_result = predict_toxicity_using_dnn_model(target_dir, features)
+    target_model_dir = target_dir+'rf_cls_%s_v2.pkl'%(target_species)
+    RF_result = predict_aot(target_model_dir, features)
     
-    target_model_dir = target_dir + 'LightGBM.pkl'    
-    LightGBM_result = predict_toxicity_using_other_models(target_model_dir, features)
-    
-    target_model_dir = target_dir + 'XGBoost.pkl'    
-    XGBoost_result = predict_toxicity_using_other_models(target_model_dir, features)
-    
-    target_model_dir = target_dir + 'RF.pkl'    
-    RF_result = predict_toxicity_using_other_models(target_model_dir, features)
-    
-    target_model_dir = target_dir + 'SVR.pkl'    
-    SVR_result = predict_toxicity_using_other_models(target_model_dir, features)
+    return RF_result[0]
 
-    return DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result
-
-def run_chemprop(input_file, output_dir):
-    subprocess.call('chemprop_predict --test_path %s --checkpoint_dir models/chemprop --preds_path %s/chemprop_result.csv --no_cuda'%(input_file, output_dir), shell=True, stderr=subprocess.STDOUT)
-    return
-
-def merge_predictions(DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result, chemprop_mouse_result):
-    pred_values = []
-    for i in range(len(DNN_result)):
-        ensemble_value = np.mean([DNN_result[i], LightGBM_result[i], XGBoost_result[i], RF_result[i], SVR_result[i], chemprop_mouse_result[i]])
-        pred_values.append(ensemble_value)
-    return np.asarray(pred_values)
+def convert_ld50(value):
+    result = np.power(10, value)
+    return result-1
 
 if __name__ == '__main__':
     parser = argument_parser()    
@@ -116,38 +80,53 @@ if __name__ == '__main__':
     except:
         pass
     
-    
     cid_list, smiles_list = read_smiles(input_file)
-    features = calculate_feature(smiles_list)
-    
-    run_chemprop(input_file, output_dir)
-    chemprop_result_df = pd.read_csv(output_dir+'/chemprop_result.csv')
-    chemprop_mouse_result = chemprop_result_df['MOUSE'].values
-    chemprop_rat_result = chemprop_result_df['RAT'].values
-    
-    DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result = predict_toxicity('mouse', features)
-    mouse_ensemble_values = merge_predictions(DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result, chemprop_mouse_result)
-    
-    result_df = pd.DataFrame()
-    result_df['Mouse DNN'] = DNN_result
-    result_df['Mouse LightGBM'] = LightGBM_result
-    result_df['Mouse XGBoost'] = XGBoost_result
-    result_df['Mouse RF'] = RF_result
-    result_df['Mouse SVR'] = SVR_result
-    result_df['Mouse chemprop'] = chemprop_mouse_result
-    result_df['Mouse ENSEMBLE'] = mouse_ensemble_values
-    
-    DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result = predict_toxicity('rat', features)
-    rat_ensemble_values = merge_predictions(DNN_result, LightGBM_result, XGBoost_result, RF_result, SVR_result, chemprop_rat_result)
-    
-    result_df['Rat DNN'] = DNN_result
-    result_df['Rat LightGBM'] = LightGBM_result
-    result_df['Rat XGBoost'] = XGBoost_result
-    result_df['Rat RF'] = RF_result
-    result_df['Rat SVR'] = SVR_result
-    result_df['Rat chemprop'] = chemprop_rat_result
-    result_df['Rat ENSEMBLE'] = rat_ensemble_values
-    
-    result_df.index = cid_list
-    result_df.to_csv(output_dir + '/Toxicity_prediction_result.csv')
+    fp = open(output_dir+'/Toxicity_prediction_result.txt', 'w')
+    fp.write('%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%('Smiles', 'Mouse(cls)', 'Mouse LD50(mg/kg)', 'Rat(cls)', 'Rat LD50(mg/kg)', 'Mouse all', 'Rat all'))
+    for i in tqdm.tqdm(range(len(smiles_list))):
+        smi_list = [smiles_list[i]]
+        features = calculate_feature(smi_list)
+        
+        mouse_cls_result = predict_toxicity_cls('mouse', features)
+        if mouse_cls_result == 0:
+            target_model_dir = './models/rf_reg_mouse_nt.pkl'
+        else:
+            target_model_dir = './models/rf_reg_mouse_t.pkl'
+
+        mouse_reg_result = predict_toxicity_reg(target_model_dir, features)        
+        mouse_ld50_mpk = convert_ld50(mouse_reg_result)
+        
+        rat_cls_result = predict_toxicity_cls('rat', features)
+        if rat_cls_result == 0:
+            target_model_dir = './models/rf_reg_rat_nt.pkl'
+        else:
+            target_model_dir = './models/rf_reg_rat_t.pkl'
+        
+        rat_reg_result = predict_toxicity_reg(target_model_dir, features)        
+        rat_ld50_mpk = convert_ld50(rat_reg_result)
+        
+        # conventional mouse
+        target_model_dir = './models/rf_conventional_mouse_all.pkl'
+        mouse_conventional_result = predict_toxicity_reg(target_model_dir, features)     
+        mouse_conventional_ld50_mpk = convert_ld50(mouse_conventional_result)
+        
+        # conventional rat
+        target_model_dir = './models/rf_conventional_rat_all.pkl'
+        rat_conventional_result = predict_toxicity_reg(target_model_dir, features)     
+        rat_conventional_ld50_mpk = convert_ld50(rat_conventional_result)
+        
+        mouse_cls = None
+        if mouse_cls_result == 0:
+            mouse_cls = 'Non-toxic'
+        else:
+            mouse_cls = 'Toxic'
+            
+        rat_cls = None
+        if rat_cls_result == 0:
+            rat_cls = 'Non-toxic'
+        else:
+            rat_cls = 'Toxic'
+            
+        fp.write('%s\t%s\t%s\t%s\t%s\t%s\t%s\n'%(smiles_list[i], mouse_cls, mouse_ld50_mpk, rat_cls, rat_ld50_mpk, mouse_conventional_ld50_mpk, rat_conventional_ld50_mpk))
+    fp.close()
     
